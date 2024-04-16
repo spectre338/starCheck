@@ -1,9 +1,8 @@
 #include <WiFi.h>
 #include <Adafruit_NeoPixel.h>
+#include "secrets.h"   // Include secrets file for WiFi credentials
 
 // WiFi settings
-const char* WIFI_SSID = "ZTI";
-const char* WIFI_PASS = "Zai123!!Zai123!!";
 const char* PING_HOST = "192.168.1.1"; // Replace with your WAP IP address or a local server
 
 // Neopixel settings
