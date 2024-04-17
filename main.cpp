@@ -1,97 +1,98 @@
-#include <WiFi.h>
+#include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-#include "secrets.h"   // Include secrets file for WiFi credentials
-
-// WiFi settings
-const char* PING_HOST = "192.168.1.1"; // Replace with your WAP IP address or a local server
+#include <WiFi.h>
+#include <ESP32Ping.h>
+#include "secrets.h" // Include secrets.h for WiFi credentials
 
 // Neopixel settings
-const int LED_PIN = 10;
-const int NUM_PIXELS = 1;
+const int LED_PIN = 10;     // Neopixel LED pin
+const int NUM_PIXELS = 2;   // Total number of Neopixels
 
 // Neopixel object
-Adafruit_NeoPixel pixels(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel statusPixel(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Function prototypes
+bool checkDNSHealth();
 void connectToWiFi();
-void breatheEffect(uint32_t color);
-bool isWiFiConnected();
 
 void setup() {
     Serial.begin(115200);
     delay(1000); // Wait for serial monitor to initialize
+    Serial.println("Initializing...");
 
     // Initialize Neopixel
-    pixels.begin();
-    pixels.clear(); // Clear any existing pixel data
-    pixels.setBrightness(50); // Set initial brightness (adjust as needed)
+    statusPixel.begin();
+    statusPixel.clear(); // Clear any existing pixel data
+    statusPixel.setBrightness(50); // Set initial brightness (adjust as needed)
 
-    // Attempt WiFi connection
+    // Attempt initial WiFi connection
     connectToWiFi();
 }
 
 void loop() {
-    // Check WiFi status every 5 seconds
-    delay(5000);
-
-    if (isWiFiConnected()) {
-        // WiFi is still connected, breathe green
-        breatheEffect(pixels.Color(0, 255, 0));
+    // Check WiFi connection status
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi connected");
+        // WiFi connected, set WiFi status LED (first LED) to green
+        statusPixel.setPixelColor(0, statusPixel.Color(0, 255, 0)); // Green color (first LED)
     } else {
-        // WiFi is not connected, clear any existing pixel data
-        pixels.clear();
-        pixels.setBrightness(50); // Set brightness for solid color display
-        pixels.fill(pixels.Color(255, 0, 0)); // Solid red color
-        pixels.show();
-        
-        Serial.println("WiFi connection lost or not established.");
+        Serial.println("WiFi not connected");
+        // WiFi not connected, set WiFi status LED (first LED) to red
+        statusPixel.setPixelColor(0, statusPixel.Color(255, 0, 0)); // Red color (first LED)
 
-        // Attempt to reconnect
-        connectToWiFi();
+        // Attempt WiFi reconnection
+        connectToWiFi(); // Try to reconnect to WiFi
     }
-}
 
+    // Check DNS health
+    bool isDNSHealthy = checkDNSHealth();
+
+    // Set DNS status LED (second LED) based on DNS health
+    if (isDNSHealthy) {
+        Serial.println("DNS servers reachable");
+        // DNS servers reachable, set DNS status LED (second LED) to blue
+        statusPixel.setPixelColor(1, statusPixel.Color(0, 0, 255)); // Blue color (second LED)
+    } else {
+        Serial.println("DNS servers not reachable");
+        // DNS servers not reachable, set DNS status LED (second LED) to red
+        statusPixel.setPixelColor(1, statusPixel.Color(255, 0, 0)); // Red color (second LED)
+    }
+
+    // Show Neopixel updates
+    statusPixel.show();
+
+    // Delay before next loop iteration
+    delay(5000); // Adjust as needed
+}
 
 void connectToWiFi() {
-    Serial.println("Connecting to WiFi...");
-
+    Serial.println("Attempting WiFi connection...");
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-    // Wait for WiFi connection or timeout after 10 seconds
-    unsigned long startAttemptTime = millis();
-    while (!isWiFiConnected() && millis() - startAttemptTime < 10000) { // Try for up to 10 seconds
-        delay(500); // Check every 0.5 seconds
-        Serial.print(".");
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 5) {
+        delay(5000); // Wait 5 seconds before retrying WiFi connection
+        attempts++;
+        Serial.println("WiFi connection attempt failed. Retrying...");
+        WiFi.reconnect(); // Attempt to reconnect to WiFi
     }
 
-    if (isWiFiConnected()) {
-        Serial.println("\nConnected to WiFi!");
-        // WiFi connection successful, breathe green
-        breatheEffect(pixels.Color(0, 255, 0));
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi connected successfully!");
     } else {
-        Serial.println("\nFailed to connect to WiFi!");
-        // WiFi connection failed, display solid red
-        pixels.fill(pixels.Color(255, 0, 0));
-        pixels.show();
+        Serial.println("WiFi connection failed after multiple attempts.");
     }
 }
 
-void breatheEffect(uint32_t color) {
-    // Perform breathing effect
-    for (int brightness = 0; brightness <= 255; brightness++) { // Increase brightness
-        pixels.setBrightness(brightness);
-        pixels.fill(color);
-        pixels.show();
-        delay(10); // Adjust breathing speed (lower value = faster)
+bool checkDNSHealth() {
+    int reachableCount = 0;
+    // Ping multiple DNS servers and count reachable ones
+    if (Ping.ping("8.8.8.8")) {
+        reachableCount++;
     }
-    for (int brightness = 255; brightness >= 0; brightness--) { // Decrease brightness
-        pixels.setBrightness(brightness);
-        pixels.fill(color);
-        pixels.show();
-        delay(10); // Adjust breathing speed (lower value = faster)
+    if (Ping.ping("1.1.1.1")) {
+        reachableCount++;
     }
-}
-
-bool isWiFiConnected() {
-    return (WiFi.status() == WL_CONNECTED && WiFi.RSSI() != 0); // Check both connection status and signal strength
+    // Add more DNS servers as needed
+    return (reachableCount >= 2); // Return true if 2 or more DNS servers are reachable
 }
