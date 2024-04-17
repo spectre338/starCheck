@@ -10,23 +10,41 @@ const int NUM_PIXELS = 2;
 const int BUZZER_PIN = 7;
 Adafruit_NeoPixel statusPixel(NUM_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-bool dnsReachable = true;
+volatile bool dnsReachable = true;
 unsigned long lastDNSCheck = 0;
-int brightness = 0;
-int fadeAmount = 5;  // Amount by which the brightness will change
-int failureCount = 0;  // Counter for consecutive DNS failures
+unsigned long pingFailStartTime = 0;
+bool pingCurrentlyFailing = false;
 
-bool checkDNSHealth();
+TaskHandle_t NetworkTaskHandle = NULL;
 
-void onWiFiEvent(WiFiEvent_t event) {
-    switch (event) {
-        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-            Serial.println("Connected to WiFi!");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-            Serial.println("Disconnected from WiFi, attempting to reconnect...");
+// Function prototype for the WiFi event handler
+void onWiFiEvent(WiFiEvent_t event);
+
+void NetworkTask(void *parameter) {
+    for (;;) {
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi is disconnected, DNS check is not possible.");
+            dnsReachable = false;  // Explicitly set DNS as unreachable
+            pingCurrentlyFailing = true;  // Assume failing until proven otherwise
+            pingFailStartTime = millis();  // Start tracking failure time
             WiFi.begin(WIFI_SSID, WIFI_PASS);
-            break;
+        } else {
+            // Only attempt to ping if WiFi is connected
+            dnsReachable = Ping.ping("1.1.1.1", 4);
+            if (!dnsReachable) {
+                Serial.println("Ping failed!");
+                if (!pingCurrentlyFailing) {
+                    pingFailStartTime = millis();
+                    pingCurrentlyFailing = true;
+                } else if (millis() - pingFailStartTime > 60000) {
+                    Serial.println("Ping failure exceeded 60 seconds, rebooting...");
+                    ESP.restart();
+                }
+            } else {
+                pingCurrentlyFailing = false;  // Reset on successful ping
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(5000)); // Check every 5 seconds
     }
 }
 
@@ -42,30 +60,16 @@ void setup() {
     statusPixel.show();
 
     WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+    xTaskCreatePinnedToCore(NetworkTask, "Network Task", 10000, NULL, 1, &NetworkTaskHandle, 0);
 }
 
 void loop() {
-    unsigned long currentMillis = millis();
-    
-    if (currentMillis - lastDNSCheck >= 5000) {
-        lastDNSCheck = currentMillis;
-        if (checkDNSHealth()) {
-            failureCount = 0;  // Reset the failure counter on success
-            dnsReachable = true;
-        } else {
-            failureCount++;  // Increment the failure counter on failure
-            if (failureCount >= 10) {
-                dnsReachable = false;
-                digitalWrite(BUZZER_PIN, HIGH);  // Turn on the buzzer after 10 failures
-            }
-        }
-    }
-
-    // Update the brightness for the pulse effect
-    brightness += fadeAmount;
-    if (brightness <= 0 || brightness >= 255) {
-        fadeAmount = -fadeAmount;
-        brightness = max(0, min(255, brightness));
+    static float phase = 0.0;
+    float brightness = (sin(phase) + 1.0) / 2.0 * 255; // Normalize and scale
+    phase += 0.005; // Slowing down the pulse by reducing the phase increment
+    if (phase > 2 * PI) {
+        phase -= 2 * PI;
     }
 
     uint32_t wifiColor = WiFi.status() == WL_CONNECTED ? statusPixel.Color(0, brightness, 0) : statusPixel.Color(brightness, 0, 0);
@@ -75,17 +79,17 @@ void loop() {
     statusPixel.setPixelColor(1, dnsColor);
     statusPixel.show();
 
-    delay(50);  // Delay to slow down the fading effect
+    delay(20);
 }
 
-bool checkDNSHealth() {
-    const char* hostname = "google.com";
-    IPAddress resolvedIP;
-    if (WiFi.hostByName(hostname, resolvedIP) && Ping.ping("1.1.1.1", 4)) {
-        Serial.println("DNS lookup and ping successful");
-        return true;
-    } else {
-        Serial.println("DNS lookup failed or ping unsuccessful");
-        return false;
+void onWiFiEvent(WiFiEvent_t event) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            Serial.println("Connected to WiFi!");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            Serial.println("Disconnected from WiFi.");
+            dnsReachable = false;  // Update DNS status on WiFi disconnect
+            break;
     }
 }
